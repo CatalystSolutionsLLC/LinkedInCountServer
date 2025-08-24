@@ -140,12 +140,20 @@ app.get("/callback", async (req, res) => {
 
     console.log("✅ User upserted to Azure SQL");
 
-    res.redirect("/");
+    res.redirect("http://localhost:5173/dashboard"); // ← Vite dev server;
   } catch (err) {
     console.error("OAuth error:", err.response?.data || err.message);
     res.status(500).send("OAuth failed.");
   }
 });
+
+app.get("/api/user", (req, res) => {
+  if (!req.session.userinfo) {
+    return res.status(401).json({ error: "Not logged in" });
+  }
+  res.json(req.session.userinfo);
+});
+
 
 // Logout
 app.get("/logout", (req, res) => {
