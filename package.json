@@ -1,21 +1,21 @@
 {
-  "name": "playground",
+  "name": "catalyst-api",
   "version": "1.0.0",
-  "main": "index.js",
+  "description": "LinkedIn OAuth2 + Azure SQL backend",
+  "main": "server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
     "axios": "^1.11.0",
+    "cors": "^2.8.5",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
     "express-session": "^1.18.2",
-    "mssql": "^11.0.1",
-    "openid-client": "^6.6.4"
-  },
-  "description": ""
+    "mssql": "^11.0.1"
+  }
 }
