@@ -1,6 +1,7 @@
 const express = require("express");
 const session = require("express-session");
 const axios = require("axios");
+const { sql, pool, poolConnect } = require("./db"); // 👈 Load Azure DB connection
 require("dotenv").config();
 
 const PORT = 3003;
@@ -92,7 +93,53 @@ app.get("/callback", async (req, res) => {
       },
     });
 
+    // Save to session
     req.session.userinfo = userinfoRes.data;
+
+    // Step 5 - Upsert to Azure SQL
+    const {
+      sub,
+      name,
+      given_name,
+      family_name,
+      email,
+      email_verified,
+      locale,
+      picture,
+    } = userinfoRes.data;
+
+    await poolConnect;
+
+    const request = pool.request();
+    request.input("sub", sql.VarChar, sub);
+    request.input("email", sql.VarChar, email);
+    request.input("name", sql.VarChar, name);
+    request.input("firstName", sql.VarChar, given_name);
+    request.input("lastName", sql.VarChar, family_name);
+    request.input("locale", sql.VarChar, typeof locale === "string" ? locale : JSON.stringify(locale));
+    request.input("picture", sql.VarChar, picture);
+    request.input("emailVerified", sql.Bit, email_verified ? 1 : 0);
+
+    await request.query(`
+      MERGE users AS target
+      USING (SELECT @sub AS sub) AS source
+      ON target.sub = source.sub
+      WHEN MATCHED THEN
+        UPDATE SET
+          email = @email,
+          name = @name,
+          firstName = @firstName,
+          lastName = @lastName,
+          locale = @locale,
+          picture = @picture,
+          emailVerified = @emailVerified
+      WHEN NOT MATCHED THEN
+        INSERT (sub, email, name, firstName, lastName, locale, picture, emailVerified)
+        VALUES (@sub, @email, @name, @firstName, @lastName, @locale, @picture, @emailVerified);
+    `);
+
+    console.log("✅ User upserted to Azure SQL");
+
     res.redirect("/");
   } catch (err) {
     console.error("OAuth error:", err.response?.data || err.message);
