@@ -1,13 +1,18 @@
+// server.js
+// Node.js + Express + LinkedIn OAuth2 + Azure SQL (prod-ready)
+
 const express = require("express");
 const session = require("express-session");
 const axios = require("axios");
-const { sql, pool, poolConnect } = require("./db"); // 👈 Load Azure DB connection
+const { sql, pool, poolConnect } = require("./db");
 require("dotenv").config();
 
-const PORT = 3003;
+const PORT = process.env.PORT ? Number(process.env.PORT) : 3003;
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 const CLIENT_ID = process.env.LINKEDIN_CLIENT_ID;
 const CLIENT_SECRET = process.env.LINKEDIN_CLIENT_SECRET;
+const FRONTEND_ORIGIN =
+  process.env.FRONTEND_ORIGIN || "http://localhost:5173"; // Vite dev or your SWA URL
 const REDIRECT_URI = `${BASE_URL}/callback`;
 
 if (!CLIENT_ID || !CLIENT_SECRET) {
@@ -17,57 +22,74 @@ if (!CLIENT_ID || !CLIENT_SECRET) {
 
 const app = express();
 
+// Behind Azure’s proxy so secure cookies work
+app.set("trust proxy", 1);
+
+// --- CORS (frontend -> backend across domains) ---
+const cors = require("cors");
 app.use(
-  session({
-    secret: process.env.SESSION_SECRET || "supersecret",
-    resave: false,
-    saveUninitialized: false,
-    cookie: { httpOnly: true, sameSite: "lax" },
+  cors({
+    origin: FRONTEND_ORIGIN,
+    credentials: true,
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
-// Homepage
-app.get("/", (req, res) => {
-  const userinfo = req.session.userinfo;
-  res.send(`
-    <h1>LinkedIn OAuth2 Login</h1>
-    ${
-      userinfo
-        ? `<pre>${JSON.stringify(userinfo, null, 2)}</pre><a href="/logout">Logout</a>`
-        : `<a href="/login">Login with LinkedIn</a>`
-    }
-  `);
+// --- Sessions ---
+// For cross-site cookies (SWA -> App Service), SameSite=None + Secure required in prod
+const isProd = process.env.NODE_ENV === "production";
+app.use(
+  session({
+    name: "sid",
+    secret: process.env.SESSION_SECRET || "supersecret",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      sameSite: isProd ? "none" : "lax",
+      secure: isProd, // true when deployed (HTTPS)
+      maxAge: 1000 * 60 * 60 * 8, // 8 hours
+    },
+  })
+);
+
+// --- Basic Home (for quick sanity) ---
+app.get("/", (_req, res) => {
+  res.type("text").send("OK - Backend alive. Try /healthz or /login");
 });
 
-// Step 1 - Redirect to LinkedIn Auth
+// --- Health check ---
+app.get("/healthz", (_req, res) => res.json({ ok: true }));
+
+// --- Start LinkedIn OAuth (Authorization Code) ---
 app.get("/login", (req, res) => {
-  const state = Math.random().toString(36).substring(2);
+  const state = Math.random().toString(36).slice(2);
   req.session.state = state;
 
-  const authURL = `https://www.linkedin.com/oauth/v2/authorization?` +
+  const authURL =
+    `https://www.linkedin.com/oauth/v2/authorization?` +
     `response_type=code&` +
     `client_id=${encodeURIComponent(CLIENT_ID)}&` +
     `redirect_uri=${encodeURIComponent(REDIRECT_URI)}&` +
     `state=${encodeURIComponent(state)}&` +
+    // 2025 docs: LinkedIn OIDC supports openid/profile/email
     `scope=${encodeURIComponent("openid profile email")}`;
 
   res.redirect(authURL);
 });
 
-// Step 2 - LinkedIn redirects back here!
+// --- OAuth Callback ---
 app.get("/callback", async (req, res) => {
   const { code, state } = req.query;
 
-  if (!code) {
-    return res.status(400).send("Missing code.");
-  }
-
-  if (state !== req.session.state) {
+  if (!code) return res.status(400).send("Missing authorization code.");
+  if (!state || state !== req.session.state) {
     return res.status(400).send("State mismatch.");
   }
 
   try {
-    // Step 3 - Exchange code for access token
+    // Exchange code for access token
     const tokenRes = await axios.post(
       "https://www.linkedin.com/oauth/v2/accessToken",
       new URLSearchParams({
@@ -77,26 +99,25 @@ app.get("/callback", async (req, res) => {
         client_id: CLIENT_ID,
         client_secret: CLIENT_SECRET,
       }),
-      {
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-      }
+      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
     );
 
     const accessToken = tokenRes.data.access_token;
 
-    // Step 4 - Fetch userinfo from LinkedIn OIDC endpoint
-    const userinfoRes = await axios.get("https://api.linkedin.com/v2/userinfo", {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    });
+    // Fetch userinfo via LinkedIn OIDC userinfo endpoint
+    const userinfoRes = await axios.get(
+      "https://api.linkedin.com/v2/userinfo",
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }
+    );
+
+    const userinfo = userinfoRes.data;
 
     // Save to session
-    req.session.userinfo = userinfoRes.data;
+    req.session.userinfo = userinfo;
 
-    // Step 5 - Upsert to Azure SQL
+    // Upsert user to Azure SQL
     const {
       sub,
       name,
@@ -106,18 +127,22 @@ app.get("/callback", async (req, res) => {
       email_verified,
       locale,
       picture,
-    } = userinfoRes.data;
+    } = userinfo;
 
     await poolConnect;
 
     const request = pool.request();
     request.input("sub", sql.VarChar, sub);
-    request.input("email", sql.VarChar, email);
-    request.input("name", sql.VarChar, name);
-    request.input("firstName", sql.VarChar, given_name);
-    request.input("lastName", sql.VarChar, family_name);
-    request.input("locale", sql.VarChar, typeof locale === "string" ? locale : JSON.stringify(locale));
-    request.input("picture", sql.VarChar, picture);
+    request.input("email", sql.VarChar, email || null);
+    request.input("name", sql.VarChar, name || null);
+    request.input("firstName", sql.VarChar, given_name || null);
+    request.input("lastName", sql.VarChar, family_name || null);
+    request.input(
+      "locale",
+      sql.VarChar,
+      typeof locale === "string" ? locale : JSON.stringify(locale || null)
+    );
+    request.input("picture", sql.VarChar, picture || null);
     request.input("emailVerified", sql.Bit, email_verified ? 1 : 0);
 
     await request.query(`
@@ -138,15 +163,18 @@ app.get("/callback", async (req, res) => {
         VALUES (@sub, @email, @name, @firstName, @lastName, @locale, @picture, @emailVerified);
     `);
 
-    console.log("✅ User upserted to Azure SQL");
+    console.log("✅ User upserted to Azure SQL:", sub);
 
-    res.redirect("http://localhost:5173/dashboard"); // ← Vite dev server;
+    // Redirect back to your frontend dashboard
+    res.redirect(`${FRONTEND_ORIGIN}/dashboard`);
   } catch (err) {
-    console.error("OAuth error:", err.response?.data || err.message);
+    const msg = err.response?.data || err.message || err.toString();
+    console.error("OAuth callback error:", msg);
     res.status(500).send("OAuth failed.");
   }
 });
 
+// --- Authenticated user info (used by the React app) ---
 app.get("/api/user", (req, res) => {
   if (!req.session.userinfo) {
     return res.status(401).json({ error: "Not logged in" });
@@ -154,16 +182,16 @@ app.get("/api/user", (req, res) => {
   res.json(req.session.userinfo);
 });
 
-
-// Logout
+// --- Logout ---
 app.get("/logout", (req, res) => {
-  req.session.destroy(() => res.redirect("/"));
+  req.session.destroy(() => {
+    // For SPA, redirect to homepage
+    res.redirect(FRONTEND_ORIGIN);
+  });
 });
 
-// Health check
-app.get("/healthz", (_req, res) => res.json({ ok: true }));
-
-// Start server
+// --- Start server ---
 app.listen(PORT, () => {
   console.log(`✅ Server running at ${BASE_URL}`);
+  console.log(`Frontend origin set to: ${FRONTEND_ORIGIN}`);
 });
