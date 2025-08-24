@@ -53,7 +53,7 @@ app.get("/login", (req, res) => {
   res.redirect(authURL);
 });
 
-// Step 2 - LinkedIn redirects back here
+// Step 2 - LinkedIn redirects back here!
 app.get("/callback", async (req, res) => {
   const { code, state } = req.query;
 
