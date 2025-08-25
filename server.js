@@ -173,4 +173,4 @@ app.listen(PORT, () => {
   console.log(`FRONTEND_ORIGIN: ${FRONTEND_ORIGIN}`);
   console.log(`NODE_ENV: ${process.env.NODE_ENV}`);
 });
-//make it work dan
+// Ver 0.1.0
