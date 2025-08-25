@@ -161,6 +161,52 @@ app.get("/api/user", (req, res) => {
   res.json(req.session.userinfo);
 });
 
+// List users from SQL (minimal fields). Requires login.
+app.get("/api/users", async (req, res) => {
+  if (!req.session.userinfo) return res.status(401).json({ error: "Not logged in" });
+
+  try {
+    const pool = await getPool();
+    const limit = Math.min(Number(req.query.limit || 25), 200);
+    const search = (req.query.q || "").trim();
+
+    let sqlText = `
+      SELECT TOP (@limit)
+        sub,
+        COALESCE(NULLIF(name,''), CONCAT(COALESCE(firstName,''), ' ', COALESCE(lastName,''))) AS name,
+        email,
+        picture,
+        emailVerified
+      FROM dbo.users
+    `;
+
+    if (search) {
+      sqlText += `
+        WHERE email LIKE @search OR name LIKE @search 
+              OR firstName LIKE @search OR lastName LIKE @search
+      `;
+    }
+
+    sqlText += ` ORDER BY name ASC, email ASC`;
+
+    const request = pool.request()
+      .input("limit", sql.Int, limit)
+      .input("search", sql.VarChar, `%${search}%`);
+
+    const result = await request.query(sqlText);
+
+    // Optionally hide the current user so the table shows “others”
+    const meSub = req.session.userinfo?.sub;
+    const rows = (result.recordset || []).filter(r => r.sub !== meSub);
+
+    res.json(rows);
+  } catch (e) {
+    console.error("Fetch users error:", e.message);
+    res.status(500).json({ error: "Failed to fetch users" });
+  }
+});
+
+
 // Logout
 app.get("/logout", (req, res) => {
   req.session.destroy(() => res.redirect(FRONTEND_ORIGIN));
@@ -173,4 +219,4 @@ app.listen(PORT, () => {
   console.log(`FRONTEND_ORIGIN: ${FRONTEND_ORIGIN}`);
   console.log(`NODE_ENV: ${process.env.NODE_ENV}`);
 });
-// Ver 0.1.0
+// Ver 0.1.1
