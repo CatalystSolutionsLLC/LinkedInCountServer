@@ -108,54 +108,45 @@ app.get("/callback", async (req, res) => {
     // Save to session
     req.session.userinfo = userinfo;
 
-    // Upsert to Azure SQL (lazy connect)
-    const {
-      sub,
-      name,
-      given_name,
-      family_name,
-      email,
-      email_verified,
-      locale,
-      picture,
-    } = userinfo;
+    // ⬇️ ensure the session is actually written before redirecting
+    await new Promise((resolve, reject) =>
+      req.session.save((err) => (err ? reject(err) : resolve()))
+    );
 
+    // Upsert to Azure SQL (lazy connect)
+    const { sql, getPool } = require("./db");
     const pool = await getPool();
-    const request = pool.request();
-    request.input("sub", sql.VarChar, sub);
-    request.input("email", sql.VarChar, email || null);
-    request.input("name", sql.VarChar, name || null);
-    request.input("firstName", sql.VarChar, given_name || null);
-    request.input("lastName", sql.VarChar, family_name || null);
-    request.input(
+    const r = pool.request();
+    r.input("sub", sql.VarChar, userinfo.sub);
+    r.input("email", sql.VarChar, userinfo.email || null);
+    r.input("name", sql.VarChar, userinfo.name || null);
+    r.input("firstName", sql.VarChar, userinfo.given_name || null);
+    r.input("lastName", sql.VarChar, userinfo.family_name || null);
+    r.input(
       "locale",
       sql.VarChar,
-      typeof locale === "string" ? locale : JSON.stringify(locale || null)
+      typeof userinfo.locale === "string"
+        ? userinfo.locale
+        : JSON.stringify(userinfo.locale || null)
     );
-    request.input("picture", sql.VarChar, picture || null);
-    request.input("emailVerified", sql.Bit, email_verified ? 1 : 0);
+    r.input("picture", sql.VarChar, userinfo.picture || null);
+    r.input("emailVerified", sql.Bit, userinfo.email_verified ? 1 : 0);
 
-    await request.query(`
+    await r.query(`
       MERGE users AS target
       USING (SELECT @sub AS sub) AS source
       ON target.sub = source.sub
       WHEN MATCHED THEN
-        UPDATE SET
-          email = @email,
-          name = @name,
-          firstName = @firstName,
-          lastName = @lastName,
-          locale = @locale,
-          picture = @picture,
-          emailVerified = @emailVerified
+        UPDATE SET email=@email,name=@name,firstName=@firstName,lastName=@lastName,
+                   locale=@locale,picture=@picture,emailVerified=@emailVerified
       WHEN NOT MATCHED THEN
-        INSERT (sub, email, name, firstName, lastName, locale, picture, emailVerified)
-        VALUES (@sub, @email, @name, @firstName, @lastName, @locale, @picture, @emailVerified);
+        INSERT (sub,email,name,firstName,lastName,locale,picture,emailVerified)
+        VALUES (@sub,@email,@name,@firstName,@lastName,@locale,@picture,@emailVerified);
     `);
 
-    console.log("✅ User upserted to Azure SQL:", sub);
+    console.log("✅ User upserted to Azure SQL:", userinfo.sub);
 
-    // Redirect back to the SPA dashboard
+    // Redirect back to your SPA
     res.redirect(`${FRONTEND_ORIGIN}/dashboard`);
   } catch (err) {
     const msg = err.response?.data || err.message || String(err);
