@@ -1,19 +1,20 @@
 // server.js
-// Node.js + Express + LinkedIn OAuth2 + Azure SQL (prod-ready)
+// Node.js + Express + LinkedIn OAuth2 + Azure SQL (prod-ready, lazy SQL connect)
 
 const express = require("express");
 const session = require("express-session");
 const axios = require("axios");
-const { sql, pool, poolConnect } = require("./db");
+const cors = require("cors");
+const { sql, getPool } = require("./db"); // 👈 lazy pool from db.js
 require("dotenv").config();
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3003;
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 const CLIENT_ID = process.env.LINKEDIN_CLIENT_ID;
 const CLIENT_SECRET = process.env.LINKEDIN_CLIENT_SECRET;
-const FRONTEND_ORIGIN =
-  process.env.FRONTEND_ORIGIN || "http://localhost:5173"; // Vite dev or your SWA URL
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:5173";
 const REDIRECT_URI = `${BASE_URL}/callback`;
+const isProd = process.env.NODE_ENV === "production";
 
 if (!CLIENT_ID || !CLIENT_SECRET) {
   console.error("Missing LINKEDIN_CLIENT_ID or LINKEDIN_CLIENT_SECRET");
@@ -21,14 +22,17 @@ if (!CLIENT_ID || !CLIENT_SECRET) {
 }
 
 const app = express();
-app.get("/healthz", (_req, res) => res.json({ ok: true }));
-app.get("/", (_req, res) => res.type("text").send("OK - Backend alive. Try /healthz or /login"));
 
-// Behind Azure’s proxy so secure cookies work
+// FAST sanity routes BEFORE any heavy middleware
+app.get("/healthz", (_req, res) => res.json({ ok: true }));
+app.get("/", (_req, res) =>
+  res.type("text").send("OK - Backend alive. Try /healthz or /login")
+);
+
+// Make secure cookies work behind Azure’s proxy
 app.set("trust proxy", 1);
 
-// --- CORS (frontend -> backend across domains) ---
-const cors = require("cors");
+// CORS (SWA -> App Service)
 app.use(
   cors({
     origin: FRONTEND_ORIGIN,
@@ -38,9 +42,7 @@ app.use(
   })
 );
 
-// --- Sessions ---
-// For cross-site cookies (SWA -> App Service), SameSite=None + Secure required in prod
-const isProd = process.env.NODE_ENV === "production";
+// Sessions (SameSite=None for cross-site in prod)
 app.use(
   session({
     name: "sid",
@@ -50,21 +52,13 @@ app.use(
     cookie: {
       httpOnly: true,
       sameSite: isProd ? "none" : "lax",
-      secure: isProd, // true when deployed (HTTPS)
-      maxAge: 1000 * 60 * 60 * 8, // 8 hours
+      secure: isProd,
+      maxAge: 1000 * 60 * 60 * 8, // 8h
     },
   })
 );
 
-// --- Basic Home (for quick sanity) ---
-app.get("/", (_req, res) => {
-  res.type("text").send("OK - Backend alive. Try /healthz or /login");
-});
-
-// --- Health check ---
-app.get("/healthz", (_req, res) => res.json({ ok: true }));
-
-// --- Start LinkedIn OAuth (Authorization Code) ---
+// Start LinkedIn OAuth (Authorization Code)
 app.get("/login", (req, res) => {
   const state = Math.random().toString(36).slice(2);
   req.session.state = state;
@@ -75,13 +69,12 @@ app.get("/login", (req, res) => {
     `client_id=${encodeURIComponent(CLIENT_ID)}&` +
     `redirect_uri=${encodeURIComponent(REDIRECT_URI)}&` +
     `state=${encodeURIComponent(state)}&` +
-    // 2025 docs: LinkedIn OIDC supports openid/profile/email
     `scope=${encodeURIComponent("openid profile email")}`;
 
   res.redirect(authURL);
 });
 
-// --- OAuth Callback ---
+// OAuth Callback
 app.get("/callback", async (req, res) => {
   const { code, state } = req.query;
 
@@ -106,20 +99,16 @@ app.get("/callback", async (req, res) => {
 
     const accessToken = tokenRes.data.access_token;
 
-    // Fetch userinfo via LinkedIn OIDC userinfo endpoint
-    const userinfoRes = await axios.get(
+    // Fetch OIDC userinfo
+    const { data: userinfo } = await axios.get(
       "https://api.linkedin.com/v2/userinfo",
-      {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      }
+      { headers: { Authorization: `Bearer ${accessToken}` } }
     );
-
-    const userinfo = userinfoRes.data;
 
     // Save to session
     req.session.userinfo = userinfo;
 
-    // Upsert user to Azure SQL
+    // Upsert to Azure SQL (lazy connect)
     const {
       sub,
       name,
@@ -131,8 +120,7 @@ app.get("/callback", async (req, res) => {
       picture,
     } = userinfo;
 
-    await poolConnect;
-
+    const pool = await getPool();
     const request = pool.request();
     request.input("sub", sql.VarChar, sub);
     request.input("email", sql.VarChar, email || null);
@@ -167,36 +155,30 @@ app.get("/callback", async (req, res) => {
 
     console.log("✅ User upserted to Azure SQL:", sub);
 
-    // Redirect back to your frontend dashboard
+    // Redirect back to the SPA dashboard
     res.redirect(`${FRONTEND_ORIGIN}/dashboard`);
   } catch (err) {
-    const msg = err.response?.data || err.message || err.toString();
+    const msg = err.response?.data || err.message || String(err);
     console.error("OAuth callback error:", msg);
     res.status(500).send("OAuth failed.");
   }
 });
 
-// --- Authenticated user info (used by the React app) ---
+// Frontend reads session user
 app.get("/api/user", (req, res) => {
-  if (!req.session.userinfo) {
-    return res.status(401).json({ error: "Not logged in" });
-  }
+  if (!req.session.userinfo) return res.status(401).json({ error: "Not logged in" });
   res.json(req.session.userinfo);
 });
 
-// --- Logout ---
+// Logout
 app.get("/logout", (req, res) => {
-  req.session.destroy(() => {
-    // For SPA, redirect to homepage
-    res.redirect(FRONTEND_ORIGIN);
-  });
+  req.session.destroy(() => res.redirect(FRONTEND_ORIGIN));
 });
 
-// --- Start server ---
+// Start server
 app.listen(PORT, () => {
   console.log(`✅ Server listening on ${PORT}`);
   console.log(`BASE_URL: ${BASE_URL}`);
   console.log(`FRONTEND_ORIGIN: ${FRONTEND_ORIGIN}`);
   console.log(`NODE_ENV: ${process.env.NODE_ENV}`);
 });
-// ver 0.1.0
