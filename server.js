@@ -194,6 +194,8 @@ app.get("/logout", (req, res) => {
 
 // --- Start server ---
 app.listen(PORT, () => {
-  console.log(`✅ Server running at ${BASE_URL}`);
-  console.log(`Frontend origin set to: ${FRONTEND_ORIGIN}`);
+  console.log(`✅ Server listening on ${PORT}`);
+  console.log(`BASE_URL: ${BASE_URL}`);
+  console.log(`FRONTEND_ORIGIN: ${FRONTEND_ORIGIN}`);
+  console.log(`NODE_ENV: ${process.env.NODE_ENV}`);
 });
