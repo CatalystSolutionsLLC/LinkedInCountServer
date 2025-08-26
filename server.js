@@ -23,7 +23,7 @@ if (!CLIENT_ID || !CLIENT_SECRET) {
 
 const app = express();
 
-// FAST sanity routes BEFORE any heavy middleware
+//  routes BEFORE any heavy middleware
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 app.get("/", (_req, res) =>
   res.type("text").send("OK - Backend alive. Try /healthz or /login")
