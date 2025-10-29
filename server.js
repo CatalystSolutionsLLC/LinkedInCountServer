@@ -35,12 +35,16 @@ app.set("trust proxy", 1);
 // CORS (SWA -> App Service)
 app.use(
   cors({
-    origin: FRONTEND_ORIGIN,
+    origin: [
+      "https://lively-dune-0e14b4e1e.1.azurestaticapps.net",
+      "http://localhost:5173"
+    ],
     credentials: true,
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
+
 
 // Sessions (SameSite=None for cross-site in prod)
 app.use(
@@ -51,12 +55,14 @@ app.use(
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      sameSite: isProd ? "none" : "lax",
-      secure: isProd,
-      maxAge: 1000 * 60 * 60 * 8, // 8h
+      sameSite: "none", // MUST be 'none' for cross-domain cookies
+      secure: true,     // required for 'sameSite=none' to work
+      domain: ".azurewebsites.net", // <-- Add this line
+      maxAge: 1000 * 60 * 60 * 8,
     },
   })
 );
+
 
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Credentials", "true");
