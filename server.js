@@ -58,6 +58,12 @@ app.use(
   })
 );
 
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Credentials", "true");
+  next();
+});
+
+
 // Start LinkedIn OAuth (Authorization Code)
 app.get("/login", (req, res) => {
   const state = Math.random().toString(36).slice(2);
