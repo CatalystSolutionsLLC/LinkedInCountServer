@@ -158,6 +158,36 @@ function auth(req, res, next) {
 }
 
 // -----------------------------------------------------------------------------
+// Avatar Proxy (no auth — img tags can't send JWT headers)
+// Proxies LinkedIn profile photos through our domain to avoid ad-blocker blocks
+// -----------------------------------------------------------------------------
+app.get("/api/avatar/:sub", async (req, res) => {
+  try {
+    const pool = await getPool();
+    const r = pool.request();
+    r.input("sub", sql.VarChar, req.params.sub);
+    const result = await r.query("SELECT picture FROM dbo.users WHERE sub = @sub");
+
+    const pictureUrl = result.recordset[0]?.picture;
+    if (!pictureUrl) {
+      return res.status(404).send();
+    }
+
+    const imgRes = await axios.get(pictureUrl, {
+      responseType: "arraybuffer",
+      timeout: 5000,
+    });
+
+    res.set("Content-Type", imgRes.headers["content-type"] || "image/jpeg");
+    res.set("Cache-Control", "public, max-age=86400");
+    res.send(Buffer.from(imgRes.data));
+  } catch (err) {
+    console.error("Avatar proxy error:", err.message);
+    res.status(404).send();
+  }
+});
+
+// -----------------------------------------------------------------------------
 // Step 4: API Routes
 // -----------------------------------------------------------------------------
 app.get("/api/user", auth, (req, res) => res.json(req.user));
