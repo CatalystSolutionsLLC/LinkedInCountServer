@@ -92,10 +92,12 @@ app.get("/callback", async (req, res) => {
     );
 
     // Extract picture safely
+    console.log(`[OAuth] userinfo.picture raw:`, JSON.stringify(userinfo.picture));
     const pictureUrl =
       typeof userinfo.picture === "string"
         ? userinfo.picture
         : userinfo.picture?.data?.url || null;
+    console.log(`[OAuth] Extracted pictureUrl: ${pictureUrl}`);
 
     // Upsert user into Azure SQL
     const pool = await getPool();
