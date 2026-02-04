@@ -5,7 +5,12 @@ const express = require("express");
 const axios = require("axios");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
+const cron = require("node-cron");
 const { sql, getPool } = require("./db");
+const engagementRoutes = require("./routes/engagement");
+const syncRoutes = require("./routes/sync");
+const adminRoutes = require("./routes/admin");
+const { runFullSync, MOCK_MODE } = require("./services/linkedinSync");
 require("dotenv").config();
 
 const PORT = process.env.PORT || 3003;
@@ -176,9 +181,33 @@ app.get("/api/users", auth, async (req, res) => {
 });
 
 // -----------------------------------------------------------------------------
+// Engagement & Sync Routes
+// -----------------------------------------------------------------------------
+app.use("/api/engagement", auth, engagementRoutes);
+app.use("/api/sync", auth, syncRoutes);
+
+// -----------------------------------------------------------------------------
+// Admin Routes (LinkedIn authorization for sync)
+// -----------------------------------------------------------------------------
+app.use("/admin", adminRoutes);
+
+// -----------------------------------------------------------------------------
 // Logout (frontend clears token)
 // -----------------------------------------------------------------------------
 app.get("/logout", (_, res) => res.redirect(FRONTEND_ORIGIN));
+
+// -----------------------------------------------------------------------------
+// Daily Cron Job - Sync LinkedIn engagements at 6 AM
+// -----------------------------------------------------------------------------
+cron.schedule("0 6 * * *", async () => {
+  console.log("[Cron] Starting daily LinkedIn sync...");
+  try {
+    const result = await runFullSync();
+    console.log(`[Cron] Sync completed: ${result.postsProcessed} posts, ${result.engagementsFound} engagements`);
+  } catch (err) {
+    console.error("[Cron] Sync failed:", err.message);
+  }
+});
 
 // -----------------------------------------------------------------------------
 // Start
@@ -188,4 +217,5 @@ app.listen(PORT, () => {
   console.log(`➡ BASE_URL: ${BASE_URL}`);
   console.log(`➡ FRONTEND_ORIGIN: ${FRONTEND_ORIGIN}`);
   console.log(`➡ NODE_ENV: ${process.env.NODE_ENV}`);
+  console.log(`➡ LINKEDIN_MOCK_MODE: ${MOCK_MODE}`);
 });
