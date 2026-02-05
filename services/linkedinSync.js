@@ -397,6 +397,7 @@ async function getSyncLogs(limit = 10) {
 module.exports = {
   runFullSync,
   getSyncLogs,
+  getAdminToken,
   hasAdminTokenConfigured,
   MOCK_MODE,
 };

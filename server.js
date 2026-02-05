@@ -10,6 +10,8 @@ const { sql, getPool } = require("./db");
 const engagementRoutes = require("./routes/engagement");
 const syncRoutes = require("./routes/sync");
 const adminRoutes = require("./routes/admin");
+const postRoutes = require("./routes/posts");
+const advocacyRoutes = require("./routes/advocacy");
 const { runFullSync, MOCK_MODE } = require("./services/linkedinSync");
 require("dotenv").config();
 
@@ -45,6 +47,7 @@ app.use(
   })
 );
 
+app.use(express.json());
 app.set("trust proxy", 1);
 
 // -----------------------------------------------------------------------------
@@ -217,6 +220,8 @@ app.get("/api/users", auth, async (req, res) => {
 // -----------------------------------------------------------------------------
 app.use("/api/engagement", auth, engagementRoutes);
 app.use("/api/sync", auth, syncRoutes);
+app.use("/api/posts", auth, postRoutes);
+app.use("/api/advocacy", auth, advocacyRoutes);
 
 // -----------------------------------------------------------------------------
 // Admin Routes (LinkedIn authorization for sync)
